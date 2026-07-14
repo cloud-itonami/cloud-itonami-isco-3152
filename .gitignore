@@ -1,0 +1,10 @@
+target/
+.cpcache/
+.clj-kondo/
+.lsp/
+*.swp
+*.swo
+*~
+.DS_Store
+.vscode/
+.idea/
