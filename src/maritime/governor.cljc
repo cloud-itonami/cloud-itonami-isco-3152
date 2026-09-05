@@ -5,35 +5,55 @@
 
   HARD invariants (:hard? true, ALWAYS :hold, never overridable):
     1. vessel-registered    — the vessel must be registered before any operation.
-    2. no-navigation-command — proposals must NEVER contain actual course/heading
-                              commands, collision-avoidance decisions, or command
-                              authority actions. Only administrative coordination
-                              (planning, reporting, hazard surfacing) are permitted.
-    3. effect-is-propose    — :effect must be :propose only (the governor
+    2. operation-permitted  — the op must be in `maritime.operation/catalogue`,
+                              the closed allowlist. Anything else is refused,
+                              whether or not anyone anticipated it. Command
+                              authority (course/heading orders, collision
+                              avoidance, master's commands) is refused with a
+                              specific explanation, but it is refused by the
+                              same rule as an op nobody has ever seen.
+    3. operation-complete   — the payload must carry the fields the catalogue
+                              requires, so a committed record is a record of
+                              something.
+    4. effect-is-propose    — :effect must be :propose only (the governor
                               never directly executes operations).
 
   ESCALATION invariants (:escalate? true, ALWAYS human sign-off):
-    4. :flag-navigational-hazard — any hazard flagging always escalates
-                              to human review, regardless of confidence.
-    5. low confidence (< confidence-floor)."
-  (:require [maritime.store :as store]))
+    5. ops the catalogue marks :escalates? true (`:flag-navigational-hazard`).
+    6. low confidence (< confidence-floor).
+
+  Invariant 2 was a deny-list until 2026-09-06. It named five forbidden ops
+  and admitted every op it did not name, so `:alter-course`,
+  `:override-autopilot`, `:issue-helm-order` and `:engine-order` all committed
+  records on a registered vessel — measured, not hypothesised. The list of
+  operations a ship's officer must never delegate is not a list anyone
+  finishes writing, so the allowlist is the one that is enumerated."
+  (:require [maritime.operation :as operation]
+            [maritime.store :as store]))
 
 (def confidence-floor 0.6)
 
-(def ^:private always-escalate-ops #{:flag-navigational-hazard})
-
 (defn- hard-violations [{:keys [request proposal]}]
-  (let [{:keys [vessel-id op]} proposal
-        vessel-record (:vessel-record request)]
+  (let [{:keys [op]} proposal
+        vessel-record (:vessel-record request)
+        missing (operation/missing-fields op proposal)]
     (cond-> []
       (nil? vessel-record)
       (conj {:rule :no-vessel
              :detail "未登録 vessel — 登録していない船舶での作業不可"})
 
-      (and (some #{:course-command :heading-command :collision-avoidance :master-command :command-authority}
-                 [op]))
-      (conj {:rule :no-navigation-command
-             :detail "実航行・衝突回避・司令権の行使は禁止（master・desk officer の人間権限のみ）"})
+      (not (operation/permitted? op))
+      (conj {:rule (if (contains? operation/named-command-authority op)
+                     :no-navigation-command
+                     :operation-not-permitted)
+             :op op
+             :detail (operation/refusal-detail op)})
+
+      (seq missing)
+      (conj {:rule :incomplete-operation
+             :op op
+             :missing (vec missing)
+             :detail (str "必須項目が欠けている: " (pr-str (vec missing)))})
 
       (not= :propose (:effect proposal))
       (conj {:rule :no-actuation
@@ -52,7 +72,7 @@
         hard? (boolean (seq hard))
         conf (or (:confidence proposal) 0.0)
         low? (< conf confidence-floor)
-        always-risky? (contains? always-escalate-ops (:op proposal))]
+        always-risky? (operation/escalates? (:op proposal))]
     {:ok? (and (not hard?) (not low?) (not always-risky?))
      :violations hard
      :confidence conf
