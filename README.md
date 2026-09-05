@@ -10,8 +10,9 @@ This repository designs a maritime deck coordination actor for ship operations: 
 and an independent `MaritimeDeckGovernor` (`maritime.governor`),
 following the itonami actor pattern (ADR-2607011000): `:intake -> :advise
 -> :govern -> :decide -+-> :commit (:ok?) +-> :request-approval (:escalate?,
-human-in-the-loop interrupt) +-> :hold (:hard?)`. 7 tests / 17 assertions
-green (`clojure -M:test`).
+human-in-the-loop interrupt) +-> :hold (:hard?)`. The closed allowlist of
+permitted operations is `maritime.operation/catalogue`. 19 tests / 119
+assertions green (`clojure -M:test`).
 
 ## What This Actor Does NOT Do
 
@@ -29,27 +30,44 @@ It does NOT:**
 
 ## Scope & HARD invariants
 
-Proposal ops (closed allowlist, all `:effect :propose`):
+Proposal ops — the closed allowlist, all `:effect :propose`. The list lives in
+`maritime.operation/catalogue`; this table is a reading of it, and
+`permitted-ops-matches-the-catalogue` keeps the two from drifting apart:
 
-- `:log-position-report` — routine position/status reporting (latitude, longitude, course, speed)
-- `:draft-voyage-plan` — voyage-plan draft for the officer's own review and filing (route, timing, hazards noted)
-- `:flag-navigational-hazard` — surface a reported navigational hazard (weather, traffic, obstacles), ALWAYS escalates
-- `:coordinate-port-arrival` — port-arrival logistics coordination (ETA, berth, cargo notes)
+| op | required payload | escalates? |
+|---|---|---|
+| `:log-position-report` — routine position/status reporting | `:latitude` `:longitude` | no |
+| `:draft-voyage-plan` — voyage-plan draft for the officer's own review and filing | `:departure-port` `:destination-port` | no |
+| `:flag-navigational-hazard` — surface a reported navigational hazard (weather, traffic, obstacles) | `:hazard-description` | **always** |
+| `:coordinate-port-arrival` — port-arrival logistics coordination (ETA, berth, cargo) | `:port` | no |
 
 **HARD invariants** (always `:hold`, never overridable):
 
 1. **vessel-registered** — the vessel must be registered before any operation.
-2. **no-navigation-command** — proposals must NEVER contain actual course/heading commands,
-   collision-avoidance decisions, or command authority actions (`:course-command`, `:heading-command`,
-   `:collision-avoidance`, `:master-command`, `:command-authority`).
-   Only administrative coordination (planning, reporting, hazard surfacing) are permitted.
-3. **effect-is-propose** — `:effect` must be `:propose` only (the governor
+2. **operation-permitted** — the op must be in the catalogue above. Anything
+   else is refused, whether or not anyone anticipated it. Command authority
+   (`:course-command`, `:heading-command`, `:collision-avoidance`,
+   `:master-command`, `:command-authority`) is refused with a specific
+   explanation naming the human authority it belongs to, but it is refused by
+   the same allowlist as an op nobody has ever seen.
+3. **operation-complete** — the payload must carry the fields the catalogue
+   requires, so a committed record is a record of something.
+4. **effect-is-propose** — `:effect` must be `:propose` only (the governor
    never directly executes operations).
 
 **ESCALATION invariants** (always human sign-off):
 
-4. **`:flag-navigational-hazard`** always escalates, regardless of confidence.
-5. **Low confidence** (< 0.6) escalates to human review.
+5. **`:flag-navigational-hazard`** always escalates, regardless of confidence.
+   The policy is the catalogue's `:escalates?`, not a second list in the governor.
+6. **Low confidence** (< 0.6) escalates to human review.
+
+> Invariant 2 was a deny-list until 2026-09-06: it named five forbidden ops and
+> admitted every op it did not name, while this README already claimed a closed
+> allowlist. Measured on that build, `:alter-course`, `:override-autopilot`,
+> `:issue-helm-order`, `:engine-order` and even `:anything-at-all` all reached
+> `:commit` and wrote a record on a registered vessel. The list of orders a
+> ship's officer must never delegate is not a list anyone finishes writing, so
+> the enumerated list is now the permitted one.
 
 ## Capability layer
 
