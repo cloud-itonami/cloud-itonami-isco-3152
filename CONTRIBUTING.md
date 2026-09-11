@@ -16,7 +16,7 @@ patterns established by cloud-itonami ISCO actor projects.
 Run the test suite before submitting a pull request:
 
 ```bash
-clojure -M:test
+kbb -M:test
 ```
 
 ## Scope Boundaries
